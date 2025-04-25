@@ -1,0 +1,2 @@
+docker pull jupyter/scipy-notebook
+docker run -d -p 8888:8888 -v ~/Desktop:/home/jovyan/work jupyter/scipy-notebook
