@@ -1,67 +1,61 @@
-#!/usr/bin/env python3
+## 데이터를 정제해가지고 한다.
+short_file = 'bible-3letter.txt'       ## 짧은 이름만 있는 것
+long_file = 'bible-fullname.txt'      ## 긴 이름만 있는 것
+kjv_file  = 'kjvdat.txt'              ## 성경 전문
+sql_file  = 'import.sql'      ## import.sql
 
-import pathlib  ## 파일 경로를 다루는 표준 라이브러리이다.
-import re       ## 제어 문자나 공백을 간편하게 찾아서 정리할때 쓰는 것
-import sys      ## 프로그램을 강제로 종료 하거나, 커맨드라인 인자를 읽을때
+
+## for문과 매핑을 통하여서 짧은 이름과 긴 이름을 연결한다.
+short = open(short_file, encoding='utf-8').read().splitlines()
+long = open(long_file, encoding='utf-8').read().splitlines()
+
+## 짧은 이름과 긴 이름을 서로 매핑한다.
+mapping = {}
+
+## 짧은 이름을 키로 그 값을 정식 명칭으로 한다.
+## for 문을 사용하여서 둘이 매핑을 해준다.
+## Gen - Genesis가 될 수 있도록
+for i in range(len(short)):
+    mapping[short[i]] = long[i]
 
 
-# ---------- 0. 경로 설정 ----------
-BASE = pathlib.Path(__file__).parent
-SRC_TXT   = BASE / "kjvdat.txt"
-ABBR_TXT  = BASE / "bible-3letter.txt"
-FULL_TXT  = BASE / "bible-fullname.txt"
-OUT_SQL   = BASE / "import.sql"
+k = open(kjv_file, encoding='utf-8')        ## kjv에 있는 파일을 읽어오고
+s = open(sql_file, 'w', encoding='utf-8')   ## sql파일에 써 넣을 것이다.
 
-# ---------- 1. 약어 → 정식명 매핑 ----------
-try:
-    abbrs = [l.strip() for l in ABBR_TXT.read_text(encoding="utf-8").splitlines() if l.strip()]
-    fulls = [l.strip() for l in FULL_TXT.read_text(encoding="utf-8").splitlines() if l.strip()]
-except FileNotFoundError as e:
-    sys.exit(f"[ERROR] 매핑 파일이 없습니다: {e.filename}")
+## Bible 데이터베이스를 사용해야한다.
+s.write('USE Bible;\n\n')
 
-if len(abbrs) != len(fulls):
-    sys.exit("[ERROR] 약어/정식명 파일 길이가 다릅니다.")
+## for문을 사용하여서 한 줄씩 처리를 해야한다.
+for line in k:                  ## 한 줄씩 읽어온다.
+    line = line.strip()         ## 개행문자 모두 삭제, 끝에 있는 공백 삭제함
+    
+    if not line:                ## 빈 문자열이면 건너 뛴다.
+        continue
+        
+        
+    parts = line.split('|') ## |을 기준으로 분리한다.
+                            ## Gen |1| |1| text... 형식으로 분류가 되어 있기 때문에
+    if len(parts) < 4:
+        continue
+    abbr = parts[0]
+    chap = parts[1]
+    verse = parts[2]
+    text = parts[3]
+    
+    # 끝에 물결표 제거한다.
+    if text.endswith('~'):
+        text = text[:-1]
+        
+    # 작은따옴표 이스케이프
+    text = text.replace("'", "''")
+    
+    # 책 이름 변환한다.
+    book = mapping.get(abbr, abbr)
+    
+    # SQL INSERT문 작성한다.
+    sql = "INSERT INTO Bible (book, chapter, verse, text) VALUES ('" + book + "', " + chap + ", " + verse + ", '" + text + "');\n"
+    s.write(sql)
 
-mapping = dict(zip(abbrs, fulls))  # e.g.  {'Gen': 'Genesis', ...}
-
-# ---------- 2. 본문 정제 함수 ----------
-_ctrl_regex = re.compile(r"[\x00-\x1F]")            # 제어문자(탭, CR 등)
-_space_regex = re.compile(r"\s{2,}")                # 두 칸 이상 연속 공백
-
-def clean(raw: str) -> str:
-    """본문에서 포맷용 특수문자를 제거하고 SQL-safe 하게 변환한다."""
-    text = raw.rstrip().rstrip("~")                 # 행 끝 마커 '~' 제거
-    text = text.strip()
-    text = _ctrl_regex.sub(" ", text)               # 보이지 않는 제어문자 → 공백
-    text = _space_regex.sub(" ", text)              # 중복 공백 1칸으로
-    text = text.replace("'", "''")                  # SQL 작은따옴표 이스케이프
-    return text
-
-# ---------- 3. INSERT 구문 생성 ----------
-def make_sql(book: str, chap: int, verse: int, text: str) -> str:
-    return (f"INSERT INTO Bible (book, chapter, verse, text) "
-            f"VALUES ('{book}', {chap}, {verse}, '{text}');\n")
-
-# ---------- 4. 메인 루프 ----------
-rows = 0
-with SRC_TXT.open(encoding="utf-8") as src, OUT_SQL.open("w", encoding="utf-8") as out:
-    out.write("USE Bible;\n\n")
-    for line in src:
-        line = line.rstrip("\n")
-        if not line:
-            continue
-        try:
-            abbr, chap_str, verse_str, raw_text = line.split("|", 3)
-        except ValueError:
-            print(f"[WARN] 구문 오류(건너뜀): {line[:50]}...")
-            continue
-
-        book = mapping.get(abbr, abbr)              # 매핑 없으면 약어 그대로
-        chap  = int(chap_str)
-        verse = int(verse_str)
-        text  = clean(raw_text)
-
-        out.write(make_sql(book, chap, verse, text))
-        rows += 1
-
-print(f"[DONE] import.sql 생성 완료 — {rows:,} 행 기록")
+## 파일을 닫는다.
+k.close()
+s.close()
